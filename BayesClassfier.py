@@ -1,3 +1,8 @@
+"""
+A simple implementation of Bayesian Classifier
+@data: 2019.12.9
+@author: Tingyu Mo
+"""
 import pandas as pd
 import numpy as np
 import os
