@@ -1,6 +1,6 @@
 """
 A simple implementation of Bayesian Classifier
-@data: 2019.12.9
+@data: 2019.12.11
 @author: Tingyu Mo
 """
 import pandas as pd
