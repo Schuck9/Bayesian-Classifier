@@ -1,6 +1,6 @@
 """
 A simple implementation of Bayesian Classifier
-@data: 2019.12.11
+@data: 2019.12.15
 @author: Tingyu Mo
 """
 import pandas as pd
@@ -26,6 +26,8 @@ class BayesianClassifier():
         self.params_dict = {} #存放各类概率密度函数的参数 {'classname',(mu,std)}
         self.CCPPF = {}  #类条件概率密度函数 {'classname',p(x|w)}
         self.posterior_distribution = {} 
+        self.risk_list = []#存放数据流计算的条件风险列表
+        self.kN_CCPPF = {}
         # self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         
 
@@ -100,6 +102,14 @@ class BayesianClassifier():
                 CCPPF[key] = self.Gaussian_distribution(x,mu,sigma)
         if self.CCP_estimate_method == "parzen-window":
             CCPPF = self.parzen_window_estimate(x,x_train,y_train,h1)
+
+        if self.CCP_estimate_method == "k-neighbours":
+            if not self.kN_CCPPF:
+                N = 500
+                for key in self.class_name:
+                    self.kN_CCPPF[key] = np.zeros(N)
+                self.kN_CCPPF_estimate(x_train,y_train)
+            CCPPF = self.kneighbours_estimate(x)
 
         self.CCPPF = CCPPF
         return CCPPF
@@ -193,6 +203,64 @@ class BayesianClassifier():
         '''
         return h1/math.sqrt(1.0*N) 
 
+    def kneighbours_estimate(self,x):
+        '''
+        According to kneighbours_estimate method,we are able to calculate CCPPF with
+        the changable window width , the number of samples in the window is calculated via the following
+        formula : kN = sqrt(N)
+        '''    
+        CCPPF = {}
+        x_axis = np.linspace(-3.09,3.19,500)
+        for key in self.class_name:
+            index_small = np.argwhere(x<x_axis)[0]
+            index_big = np.argwhere(x>x_axis)[-1]
+            CCPPF[key] = 1.0*(self.kN_CCPPF[key][index_small]+self.kN_CCPPF[key][index_big ])/2
+        return CCPPF
+
+    def kN_CCPPF_estimate(self,x_train,y_train):
+        '''
+        calculate Class conditional probility on training set
+        '''
+        x_axis = np.linspace(-3.09,3.19,500)
+        labelname = self.class_name
+        x_train_one = x_train[:,0] #第一个特征
+        #将数据集升序排序
+        unsort_xy = zip(x_train_one,y_train)
+        sort_xy = sorted(unsort_xy)
+        sort_xy = np.array(sort_xy)
+        x_train_one,y_train = sort_xy[:,0],sort_xy[:,1]
+        for key in labelname:
+            index = np.argwhere(y_train==float(key))#利用标签获取该类的索引
+            class_data = x_train_one[index]#利用该类的索引获取数据
+            N = class_data.size
+            kN = self.get_kN(N)
+            #确定下界和上界
+            for x_item in class_data:
+                x_index = np.argwhere(class_data == x_item)[0][0]
+                left_num = class_data[:x_index].size #x左边存在的样本数
+                right_num = class_data[x_index:].size#x有边的样本数
+                if left_num < kN:
+                    lower_bound = min(class_data)#最左侧区间起点
+                    upper_bound = class_data[x_index+kN-left_num]
+                elif right_num < kN:
+                    upper_bound = max(class_data)#最右侧区间起点
+                    lower_bound = class_data[x_index-kN+right_num]
+                else:
+                    upper_bound =class_data[x_index+kN//2]#中间点
+                    lower_bound = class_data[x_index-kN//2]
+                
+                update_index = np.argwhere((x_axis>lower_bound) & (x_axis<upper_bound))-1
+                self.kN_CCPPF[key][update_index] +=1.0/N  
+
+    def get_kN(self,N):
+        '''
+        kN is a variable with respect to the number of samples N
+        supposed this mapping relationship is sqrt()
+        '''
+        kN = int(math.sqrt(1.0*N))
+        # kN = 10
+        return kN
+
     def minimize_error_decision(self,x,posp):
         '''
         makes a decision on unknown-class sample by minimize error decision method
@@ -206,17 +274,45 @@ class BayesianClassifier():
         '''
         makes a decision on unknown-class sample by minimize risk decision method
         '''
-
-        risk_dict = dict()
-        for i ,key in enumerate(self.class_name):
-            for j ,prob_key in enumerate(posp.keys()):
-                risk_dict[key] += posp[prob_key]*risk[i][j]
-        decision_result = max(posp,key=posp.get)
-
+        risk_dict = self.calculate_risk(x,posp,risk)
+        decision_result = min(risk_dict,key=risk_dict.get)
         return decision_result
 
+    def calculate_risk(self,x,posp,risk):
+        '''
+        calculate the conditional risk for minimize_risk_decision
+        '''
+        risk_dict = dict()
+        for key in self.class_name:
+            risk_dict[key] = 0
+        for i ,key in enumerate(self.class_name):
+            for j ,prob_key in enumerate(self.class_name):
+                risk_dict[key] += posp[prob_key]*risk[i][j]
+        self.risk_list.append(risk_dict)
+        return risk_dict
+
+    def viz_risk(self,x_data):
+        print("visualizing the conditional risk map!")
+        risk_class = {}
+        for key in self.class_name:
+            risk_class[key] =[]
+        for risk in self.risk_list:
+            for key in self.class_name:
+                risk_class[key].append(risk[key])
+        plt.figure()
+        plt.plot(x_data,risk_class[self.class_name[0]],label='class:{}'.format(self.class_name[0]))
+        plt.plot(x_data,risk_class[self.class_name[1]],color='red',label='class:{}'.format(self.class_name[1]))
+        plt.rcParams['font.sans-serif']=['SimHei']
+        plt.rcParams['axes.unicode_minus'] = False
+        plt.title("条件风险分布曲线")
+        plt.xlabel("x")#x轴上的名字
+        plt.ylabel("R(w1|x)")#y轴上的名字
+        plt.legend(loc = 'upper right')
+        plt.show()
+        return 0
+
     def viz_CCPPF(self,x_train,y_train,h1):
-        x_data = np.linspace(-3.09,3.19,250)#从(-1,1)均匀取50个点
+        x_data = np.linspace(-3.09,3.19,500)#从(-1,1)均匀取50个点
         y_data = dict()
         print("visualizing the CCPPF!")
         for key in self.class_name:
@@ -234,6 +330,9 @@ class BayesianClassifier():
                     mu,sigma = self.params_dict[key]
                     CCPPF[key] = self.Gaussian_distribution(x,mu,sigma)
                     y_data[key].append(CCPPF[key])
+        elif(self.CCP_estimate_method == "k-neighbours"):
+            y_data = self.kN_CCPPF
+
                     
         plt.figure()
         plt.plot(x_data,y_data[self.class_name[0]],label='class:{}'.format(self.class_name[0]))
@@ -246,25 +345,35 @@ class BayesianClassifier():
         plt.legend(loc = 'upper right')
         plt.show()
 
-    def predict(self,x,x_train,y_train,h1=0.5):
+    def predict(self,x,x_train=None,y_train=None,risk=None,h1=0.5):
         CCPPF = self.class_conditional_probability(x,x_train,y_train,h1)
         posp = self.posterior_probability(x,CCPPF,self.prior_distribution)
-        result = float(self.minimize_error_decision(x,posp))
+        if self.decision_method == "MSD":
+            result = float(self.minimize_error_decision(x,posp))
+        elif self.decision_method == "MRD":
+            result = float(self.minimize_risk_decision(x,posp,risk))
         # print("prior_distribution:{}".format(self.prior_distribution))
         # print("class_conditional_probability:{}".format(CCPPF))
         # print("posterior_probability:{}".format(posp))
         return result
-    
-    def multi_predict(self,x_tensor,x_train,y_train,h1=0.5):
+
+    # def multi_predict(self,x_tensor,x_train,y_train,h1=0.5):
+    #     print("prediction starts!")
+    #     result = list()
+    #     for x in tqdm(x_tensor):
+    #         CCPPF = self.class_conditional_probability(x,x_train,y_train,h1)
+    #         posp = self.posterior_probability(x,CCPPF,self.prior_distribution)
+    #         result.append(float(self.minimize_error_decision(x,posp)))
+    #         # print("prior_distribution:{}".format(self.prior_distribution))
+    #         # print("class_conditional_probability:{}".format(CCPPF))
+    #         # print("posterior_probability:{}".format(posp))
+    #     return result
+
+    def multi_predict(self,x_tensor,x_train=None,y_train=None,risk=None,h1=0.5):
         print("prediction starts!")
         result = list()
         for x in tqdm(x_tensor):
-            CCPPF = self.class_conditional_probability(x,x_train,y_train,h1)
-            posp = self.posterior_probability(x,CCPPF,self.prior_distribution)
-            result.append(float(self.minimize_error_decision(x,posp)))
-            # print("prior_distribution:{}".format(self.prior_distribution))
-            # print("class_conditional_probability:{}".format(CCPPF))
-            # print("posterior_probability:{}".format(posp))
+            result.append(self.predict(x,x_train,y_train,risk,h1))
         return result
 
     def evaluate_with_new_valset(self,x_test,y_test,x_train,y_train,h1):
@@ -284,26 +393,31 @@ class BayesianClassifier():
 
 
 if __name__=="__main__":
-    Root_dir = r'D:/Pattern_Recognion'
+    Root_dir = r'D:/Pattern_Recognion/Exp1-2'
+    datasets_dir = os.path.join(Root_dir,"datasets")
     os.chdir(Root_dir)
-    dataset_path = os.path.join(Root_dir,'./banana.dat')
+    dataset_path = os.path.join(datasets_dir,'banana.dat')
 
     # BC = BayesianClassifier("MSD","max-likelihood")
-    BC = BayesianClassifier("MSD","parzen-window")
+    # BC = BayesianClassifier("MSD","parzen-window")
+    BC = BayesianClassifier("MSD","k-neighbours")
     
 
     features,labels = BC.data_generator(dataset_path) #load data
+    # features1 = np.random.normal(0,0.5,size=(2000,1))
+    # features2 = np.random.normal(1,0.5,size=(2000,1))
+    # features = np.hstack((features1,features2))
+    # labels = np.ones((2000,))
     x_train,x_test, y_train, y_test = BC.dataset_split(features,labels,test_size = 0.2)#split data
 
     BC.prior_distribution = BC.prior_probility(features,labels) # calculate prior distribution
     print("prior_distribution:{}".format(BC.prior_distribution))
 
     y_pred = BC.multi_predict(x_test[:,0],x_train,y_train,16)
-
     acc,prec = BC.evaluate(y_pred,y_test)
     # acc,prec = BC.evaluate_with_new_valset(x_test,y_test,x_train,y_train,h1 = 16)#evalutation
     print("acc: {} prec:{}".format(acc,prec))
 
-    BC.viz_CCPPF(x_train,y_train,h1 = 16)#visualizing
+    BC.viz_CCPPF(x_train,y_train,h1 = 32)#visualizing
 
  
