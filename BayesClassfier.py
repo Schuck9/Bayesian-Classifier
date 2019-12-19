@@ -212,8 +212,12 @@ class BayesianClassifier():
         CCPPF = {}
         x_axis = np.linspace(-3.09,3.19,500)
         for key in self.class_name:
-            index_small = np.argwhere(x<x_axis)[0]
-            index_big = np.argwhere(x>x_axis)[-1]
+            index_small = np.argwhere(x<x_axis)
+            if index_small.size>1:
+                index_small = index_small[0]
+            index_big = np.argwhere(x>x_axis)
+            if index_big.size>1:
+                index_big = index_big[-1]
             CCPPF[key] = 1.0*(self.kN_CCPPF[key][index_small]+self.kN_CCPPF[key][index_big ])/2
         return CCPPF
 
@@ -250,7 +254,8 @@ class BayesianClassifier():
                     lower_bound = class_data[x_index-kN//2]
                 
                 update_index = np.argwhere((x_axis>lower_bound) & (x_axis<upper_bound))-1
-                self.kN_CCPPF[key][update_index] +=1.0/N  
+                # self.kN_CCPPF[key][update_index] +=1.0/N
+                self.kN_CCPPF[key][update_index] = kN*1.0/(N*(upper_bound - lower_bound))
 
     def get_kN(self,N):
         '''
@@ -331,6 +336,7 @@ class BayesianClassifier():
                     CCPPF[key] = self.Gaussian_distribution(x,mu,sigma)
                     y_data[key].append(CCPPF[key])
         elif(self.CCP_estimate_method == "k-neighbours"):
+            h1 = "None"
             y_data = self.kN_CCPPF
 
                     
